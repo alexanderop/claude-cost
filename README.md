@@ -26,6 +26,14 @@ Cost/Tokens toggles, an All/Claude/Codex filter, and a "Price as" switch
 (Anthropic API, Bedrock global, Bedrock EU, Bedrock US) that re-prices Claude usage with
 LiteLLM's Bedrock entries without rescanning. Regional Bedrock endpoints cost 10% more. No chart library.
 
+Also: a Day/Hour toggle for the main chart (rolling last 48 hours, local time), a weekday x
+hour-of-day heatmap, cost per project (from each transcript's `cwd`), the ten most expensive
+sessions in the period, monthly totals with a month-to-date projection, a GitHub-style
+calendar of the last 365 days, and a "Value vs plan" tile. Enter your own monthly plan prices
+(stored in `localStorage`, nothing is assumed) and it compares API-equivalent cost to the plan
+prorated over the selected period. Everything is filtered client-side from one aggregate, so
+filters and re-pricing never rescan.
+
 This is list-price cost, not what a subscription bills. Matches `npx ccusage claude daily` within cents and `npx ccusage codex monthly` within ~2%.
 
 ## Credits

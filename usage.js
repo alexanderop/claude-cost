@@ -86,6 +86,8 @@ async function readClaude(root) {
         promptTokens:
           count(u.input_tokens) + count(u.cache_read_input_tokens) + count(u.cache_creation_input_tokens),
         reportedCost: typeof r.costUSD === 'number' ? r.costUSD : null,
+        project: typeof r.cwd === 'string' ? r.cwd : '',
+        sessionId: typeof r.sessionId === 'string' ? r.sessionId : '',
       }
       if (m.id || r.requestId) byMessage.set(`${m.id ?? ''}:${r.requestId ?? ''}`, record)
       else unkeyed.push(record)
@@ -122,6 +124,7 @@ async function readCodex(root) {
       model: '',
       speed: 'standard',
       sessionId: '',
+      cwd: '',
       lastSignature: null,
       sawMeta: false,
       suppressingForkCopies: false,
@@ -138,6 +141,7 @@ async function readCodex(root) {
         if (state.sawMeta) continue
         state.sawMeta = true
         state.sessionId = p.id ?? p.session_id ?? ''
+        if (typeof p.cwd === 'string') state.cwd = p.cwd
         const ms = Date.parse(r.timestamp)
         if (!Number.isNaN(ms) && isForkedSessionMeta(p)) {
           state.suppressingForkCopies = true
@@ -147,6 +151,7 @@ async function readCodex(root) {
       }
       if (r.type === 'turn_context') {
         if (typeof p.model === 'string') state.model = p.model
+        if (!state.cwd && typeof p.cwd === 'string') state.cwd = p.cwd
         continue
       }
       if (p.type === 'thread_settings_applied') {
@@ -190,6 +195,8 @@ async function readCodex(root) {
         speed: state.speed,
         promptTokens: input,
         reportedCost: null,
+        project: state.cwd,
+        sessionId: state.sessionId,
       })
     }
   }
@@ -308,11 +315,13 @@ function priceRecord(prices, record, profile = 'anthropic') {
 
 // ── Aggregation ───────────────────────────────────────────────────────────────
 
-const dayFormat = new Intl.DateTimeFormat('en-CA', {
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-})
+const pad = (n) => String(n).padStart(2, '0')
+
+/** Local-time bucket key `YYYY-MM-DDTHH`; its first ten characters are the local day. */
+function hourKey(timestamp) {
+  const d = new Date(timestamp)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}`
+}
 
 const SOURCES = {
   claude: { root: () => path.join(homeDir('CLAUDE_CONFIG_DIR', '.claude'), 'projects'), read: readClaude },
@@ -331,12 +340,15 @@ async function scan() {
 
 /**
  * Prices scanned records under a pricing profile. `days[day][provider]` holds
- * token and cost totals by category plus per-model figures, so the UI can
- * filter by provider and period without re-pricing. `baselineCost` is the same
- * Claude usage at Anthropic API prices, for comparison.
+ * token and cost totals by category plus per-model and per-project figures, so
+ * the UI can filter by provider and period without re-pricing. `hours` buckets
+ * the same usage by local hour, `sessions` lists every session once.
+ * `baselineCost` is the same Claude usage at Anthropic API prices, for comparison.
  */
 function aggregate(sources, prices, profile = 'anthropic') {
   const days = {}
+  const hours = {}
+  const sessions = new Map()
   const providers = {}
   const fellBackModels = new Set()
   for (const [provider, { root, files, records }] of Object.entries(sources)) {
@@ -345,24 +357,50 @@ function aggregate(sources, prices, profile = 'anthropic') {
       const priced = priceRecord(prices, record, profile)
       if (priced === null) stats.unpriced++
       if (priced?.fellBack) fellBackModels.add(record.model)
-      const day = dayFormat.format(new Date(record.timestamp))
-      const d = ((days[day] ??= {})[provider] ??= { tokens: zeros(), costs: zeros(), baselineCost: 0, cacheSavings: 0, models: {} })
+      const hour = hourKey(record.timestamp)
+      const day = hour.slice(0, 10)
+      const d = ((days[day] ??= {})[provider] ??= { tokens: zeros(), costs: zeros(), baselineCost: 0, cacheSavings: 0, models: {}, projects: {} })
+      const h = ((hours[hour] ??= {})[provider] ??= { cost: 0, tokens: 0, models: {} })
       const m = (d.models[record.model] ??= { tokens: 0, cost: 0 })
+      const hm = (h.models[record.model] ??= { tokens: 0, cost: 0 })
+      const pr = (d.projects[record.project] ??= { tokens: 0, cost: 0 })
+      const total = sumOf(record.tokens)
+      const cost = priced ? sumOf(priced.costs) : 0
       addInto(d.tokens, record.tokens)
-      m.tokens += sumOf(record.tokens)
+      m.tokens += total
+      hm.tokens += total
+      h.tokens += total
+      pr.tokens += total
+      m.cost += cost
+      hm.cost += cost
+      h.cost += cost
+      pr.cost += cost
+      if (record.sessionId) {
+        const id = `${provider}:${record.sessionId}`
+        const s = sessions.get(id) ?? { id: record.sessionId, provider, project: record.project, first: record.timestamp, last: record.timestamp, models: new Set(), responses: 0, tokens: 0, cost: 0 }
+        if (record.timestamp < s.first) s.first = record.timestamp
+        if (record.timestamp > s.last) s.last = record.timestamp
+        if (!s.project) s.project = record.project
+        s.models.add(record.model)
+        s.responses++
+        s.tokens += total
+        s.cost += cost
+        sessions.set(id, s)
+      }
       if (priced) {
         addInto(d.costs, priced.costs)
         d.cacheSavings += priced.cacheSavings
-        m.cost += sumOf(priced.costs)
         const baseline = profile === 'anthropic' ? priced : priceRecord(prices, record)
         d.baselineCost += sumOf(baseline.costs)
-        stats.cost += sumOf(priced.costs)
+        stats.cost += cost
         stats.baselineCost += sumOf(baseline.costs)
       }
     }
   }
   return {
     days,
+    hours,
+    sessions: [...sessions.values()].map((s) => ({ ...s, models: [...s.models] })),
     providers,
     profile,
     profiles: Object.fromEntries(Object.entries(PRICING_PROFILES).map(([k, v]) => [k, v.label])),

@@ -42,10 +42,26 @@
     </header>
 
     <section class="tiles" id="tiles"></section>
+    <section class="tiles tiles-extra" id="tiles-extra"></section>
+
+    <form class="card plans" id="plans" hidden>
+      <h2>Subscription plans</h2>
+      <label>Claude Code plan <input type="number" id="plan-claude" min="0" step="any" placeholder="$ / month" /></label>
+      <label>Codex / ChatGPT plan <input type="number" id="plan-codex" min="0" step="any" placeholder="$ / month" /></label>
+      <button type="submit">Save</button>
+      <button type="button" id="plans-clear">Clear</button>
+      <span class="muted">Stored on this machine only. Plan cost is prorated by days in the period.</span>
+    </form>
 
     <section class="card">
       <div class="card-head">
-        <h2 id="chart-title">Daily cost by model</h2>
+        <div class="head-left">
+          <h2 id="chart-title">Daily cost by model</h2>
+          <div class="segmented" id="resolution">
+            <button data-value="day" aria-pressed="true">Day</button>
+            <button data-value="hour">Hour</button>
+          </div>
+        </div>
         <div class="legend" id="chart-legend"></div>
       </div>
       <div class="chart">
@@ -68,6 +84,40 @@
     <section class="card">
       <h2>Models</h2>
       <table id="models"></table>
+    </section>
+
+    <section class="card">
+      <h2>Projects</h2>
+      <table id="projects"></table>
+    </section>
+
+    <section class="card">
+      <h2>Top sessions</h2>
+      <table id="sessions"></table>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>When you work</h2>
+        <span class="muted" id="hours-sub"></span>
+      </div>
+      <div class="heatmap hours" id="hours-heatmap"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Monthly</h2>
+        <span class="muted" id="months-sub"></span>
+      </div>
+      <div class="months" id="months"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Last 365 days</h2>
+        <span class="muted" id="calendar-sub"></span>
+      </div>
+      <div class="calendar-scroll"><div class="heatmap calendar" id="calendar"></div></div>
     </section>
 
     <p class="muted footnote">
