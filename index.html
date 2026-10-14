@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
-    <title>Claude Cost</title>
+    <title>Agent Cost</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -13,6 +13,11 @@
         <p class="muted" id="meta">Scanning transcripts…</p>
       </div>
       <div class="controls">
+        <div class="segmented" id="provider">
+          <button data-value="all" aria-pressed="true">All</button>
+          <button data-value="claude">Claude</button>
+          <button data-value="codex">Codex</button>
+        </div>
         <div class="segmented" id="period">
           <button data-value="7">7D</button>
           <button data-value="30" aria-pressed="true">30D</button>
@@ -46,6 +51,7 @@
     </section>
 
     <section class="shares">
+      <div class="card" id="share-provider"></div>
       <div class="card" id="share-cost"></div>
       <div class="card" id="share-tokens"></div>
     </section>

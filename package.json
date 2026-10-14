@@ -2,11 +2,11 @@
   "name": "claude-cost",
   "version": "0.1.0",
   "private": true,
-  "description": "Electron app showing API-equivalent cost of Claude Code usage",
+  "description": "Electron dashboard for the API-equivalent cost of your Claude Code and Codex usage",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "summary": "node -e \"const u=require('./usage.js');u.fetchPrices().then(p=>u.summarize({prices:p})).then(s=>{for(const d of Object.keys(s.days).sort().slice(-7)){const c=s.days[d].costs;console.log(d,(c.input+c.cacheRead+c.cacheWrite+c.output).toFixed(2))}})\""
+    "summary": "node -e \"const u=require('./usage.js');u.fetchPrices().then(p=>u.summarize({prices:p})).then(s=>{const c=x=>x?x.costs.input+x.costs.cacheRead+x.costs.cacheWrite+x.costs.output:0;for(const d of Object.keys(s.days).sort().slice(-7))console.log(d,'claude',c(s.days[d].claude).toFixed(2),'codex',c(s.days[d].codex).toFixed(2))})\""
   },
   "devDependencies": {
     "electron": "44.7.2"

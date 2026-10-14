@@ -1,6 +1,6 @@
 # claude-cost
 
-Tiny Electron app that shows the API-equivalent cost of your Claude Code usage.
+Tiny Electron app that shows the API-equivalent cost of your Claude Code and Codex usage.
 
 ```sh
 npm install
@@ -9,17 +9,22 @@ npm start
 
 How it works (same approach as T3 Code's usage page):
 
-1. Reads `~/.claude/projects/**/*.jsonl` (or `$CLAUDE_CONFIG_DIR/projects`).
-2. Keeps `assistant` lines with `message.usage`, last line per `message.id:requestId`
+1. **Claude Code:** reads `~/.claude/projects/**/*.jsonl` (or `$CLAUDE_CONFIG_DIR/projects`).
+   Keeps `assistant` lines with `message.usage`, last line per `message.id:requestId`
    (earlier streaming lines carry partial `output_tokens`).
-3. Prices tokens with LiteLLM's `model_prices_and_context_window.json`, including
-   fast-mode multiplier and 1h cache-write rates.
+2. **Codex:** reads `~/.codex/sessions/**/*.jsonl` (or `$CODEX_HOME/sessions`).
+   `token_count` events carry no model, so the model and service tier carry forward from
+   the latest `turn_context` / `thread_settings_applied`. Drops repeated events and the
+   parent history copied into forked/subagent rollouts.
+3. Prices tokens with LiteLLM's `model_prices_and_context_window.json`: Claude fast-mode
+   multiplier and 1h cache-write rates, Codex `priority`/`ultrafast` tiers and
+   long-context (>272k prompt) rates.
 
 Dashboard: metric tiles, per-model area chart (hand-rolled SVG, monotone curves ported
 from T3 Code, hover tooltip), cost/token share bars, model table. 7D/30D/90D/All and
-Cost/Tokens toggles. No chart library.
+Cost/Tokens toggles, and an All/Claude/Codex filter. No chart library.
 
-This is list-price cost, not what a subscription bills. Matches `npx ccusage daily` within cents.
+This is list-price cost, not what a subscription bills. Matches `npx ccusage claude daily` within cents and `npx ccusage codex monthly` within ~2%.
 
 ## Credits
 
