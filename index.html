@@ -28,7 +28,16 @@
           <button data-value="cost" aria-pressed="true">Cost</button>
           <button data-value="tokens">Tokens</button>
         </div>
-        <button class="icon" id="refresh" title="Refresh">↻</button>
+        <label class="select" title="Where Claude requests are priced">
+          <span>Price as</span>
+          <select id="profile">
+            <option value="anthropic">Anthropic API</option>
+            <option value="bedrock-global">Bedrock global</option>
+            <option value="bedrock-eu">Bedrock EU</option>
+            <option value="bedrock-us">Bedrock US</option>
+          </select>
+        </label>
+        <button class="icon" id="refresh" title="Rescan transcripts">↻</button>
       </div>
     </header>
 

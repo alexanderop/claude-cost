@@ -1,5 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('usage', {
-  summary: () => ipcRenderer.invoke('usage:summary'),
+  summary: (options) => ipcRenderer.invoke('usage:summary', options),
 })

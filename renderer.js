@@ -34,7 +34,7 @@ const pct = (n) => `${(n * 100).toFixed(n >= 0.1 ? 0 : 1)}%`
 const sum = (o) => o.input + o.cacheRead + o.cacheWrite + o.output
 const $ = (id) => document.getElementById(id)
 
-const state = { summary: null, period: '30', metric: 'cost', provider: 'all' }
+const state = { summary: null, period: '30', metric: 'cost', provider: 'all', profile: 'anthropic' }
 
 const selectedProviders = () =>
   state.provider === 'all' ? PROVIDERS.map((p) => p.key) : [state.provider]
@@ -74,7 +74,7 @@ function colorFor(model, used) {
 }
 
 function aggregate(periods) {
-  const totals = { tokens: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, costs: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, cacheSavings: 0, activeDays: 0 }
+  const totals = { tokens: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, costs: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, baselineCost: 0, cacheSavings: 0, activeDays: 0 }
   const byProvider = Object.fromEntries(PROVIDERS.map((p) => [p.key, 0]))
   const models = new Map()
   for (const p of periods) {
@@ -86,6 +86,7 @@ function aggregate(periods) {
         totals.costs[c.key] += day.costs[c.key]
       }
       totals.cacheSavings += day.cacheSavings
+      totals.baselineCost += day.baselineCost
       byProvider[provider] += sum(day.costs)
       for (const [name, m] of Object.entries(day.models)) {
         if (m.tokens === 0 && m.cost === 0) continue
@@ -116,8 +117,15 @@ function renderTiles({ totals }, periods) {
   const cost = sum(totals.costs)
   const allTokens = sum(totals.tokens)
   const inputSide = totals.tokens.input + totals.tokens.cacheRead + totals.tokens.cacheWrite
+  const delta = cost - totals.baselineCost
+  const costTile = tile('Cost', usd(cost), `${usd(cost / periods.length)} / day avg`)
+  if (state.profile !== 'anthropic' && Math.abs(delta) >= 0.005) {
+    const sub = costTile.querySelector('.sub')
+    sub.textContent = `${delta > 0 ? '+' : '−'}${usd(Math.abs(delta))} vs Anthropic API`
+    sub.className = 'sub delta-up'
+  }
   $('tiles').replaceChildren(
-    tile('Cost', usd(cost), `${usd(cost / periods.length)} / day avg`),
+    costTile,
     tile('Processed tokens', tokens(allTokens), `${totals.activeDays} active days`),
     tile('Output tokens', tokens(totals.tokens.output), `${usd(totals.costs.output)} of cost`),
     tile('Cache hit rate', inputSide ? pct(totals.tokens.cacheRead / inputSide) : '—', 'of input read from cache'),
@@ -243,21 +251,23 @@ function render() {
   renderModels(agg)
 }
 
-async function load() {
+async function load({ rescan = false } = {}) {
   const meta = $('meta')
   const refresh = $('refresh')
   refresh.classList.add('spinning')
   meta.className = 'muted'
   try {
-    state.summary = await window.usage.summary()
+    state.summary = await window.usage.summary({ profile: state.profile, rescan })
     const s = state.summary
     meta.textContent = [
       ...PROVIDERS.map(({ key, label }) => {
         const p = s.providers[key]
         return `${label}: ${p.records.toLocaleString()} responses in ${p.files.toLocaleString()} files${p.unpriced ? `, ${p.unpriced} unpriced` : ''}`
       }),
+      s.profile !== 'anthropic' && `Claude priced as ${s.profiles[s.profile]}`,
+      s.fellBackModels.length && `${s.fellBackModels.join(', ')} at API rates (no Bedrock price)`,
       `updated ${new Date(s.readAt).toLocaleTimeString()}`,
-    ].join(' · ')
+    ].filter(Boolean).join(' · ')
     render()
   } catch (err) {
     meta.className = 'muted error'
@@ -280,5 +290,9 @@ function segmented(id, key) {
 segmented('period', 'period')
 segmented('metric', 'metric')
 segmented('provider', 'provider')
-$('refresh').addEventListener('click', load)
+$('refresh').addEventListener('click', () => load({ rescan: true }))
+$('profile').addEventListener('change', (event) => {
+  state.profile = event.target.value
+  load()
+})
 load()

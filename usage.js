@@ -13,9 +13,6 @@ const PRICES_URL =
 // Bare family names are ambiguous across generations; <synthetic> was never billed.
 const UNPRICEABLE = new Set(['<synthetic>', 'synthetic', 'opus', 'sonnet', 'haiku', 'fable'])
 
-// OpenAI bills a whole request at long-context rates once its prompt passes this.
-const LONG_CONTEXT_THRESHOLD = 272_000
-
 // A forked Codex rollout opens with the parent's history copied in one burst.
 // Same threshold as T3 Code and ccusage.
 const FORK_COPY_MAX_GAP_MS = 1000
@@ -86,7 +83,8 @@ async function readClaude(root) {
         },
         write1h: count(u.cache_creation?.ephemeral_1h_input_tokens),
         speed: u.speed === 'fast' ? 'fast' : 'standard',
-        longContext: false,
+        promptTokens:
+          count(u.input_tokens) + count(u.cache_read_input_tokens) + count(u.cache_creation_input_tokens),
         reportedCost: typeof r.costUSD === 'number' ? r.costUSD : null,
       }
       if (m.id || r.requestId) byMessage.set(`${m.id ?? ''}:${r.requestId ?? ''}`, record)
@@ -190,7 +188,7 @@ async function readCodex(root) {
         tokens,
         write1h: 0,
         speed: state.speed,
-        longContext: input > LONG_CONTEXT_THRESHOLD,
+        promptTokens: input,
         reportedCost: null,
       })
     }
@@ -202,26 +200,65 @@ async function readCodex(root) {
 
 const SPEED_SUFFIX = { standard: '', fast: '_priority', ultrafast: '_ultrafast' }
 
-function lookupRate(prices, model) {
-  const key = model.trim().toLowerCase().split('[')[0]
-  if (UNPRICEABLE.has(key)) return null
-  const p = prices[key]
-  if (typeof p?.input_cost_per_token !== 'number' || typeof p?.output_cost_per_token !== 'number') {
-    return null
+/**
+ * Where Claude requests are priced. Bedrock rates live in LiteLLM under
+ * prefixed keys; regional endpoints cost ~10% more than global.
+ */
+const PRICING_PROFILES = {
+  anthropic: { label: 'Anthropic API', key: (m) => m },
+  'bedrock-global': { label: 'Bedrock global', key: (m) => `global.anthropic.${m}` },
+  'bedrock-eu': { label: 'Bedrock EU', key: (m) => `eu.anthropic.${m}` },
+  'bedrock-us': { label: 'Bedrock US', key: (m) => `us.anthropic.${m}` },
+}
+
+function validEntry(p) {
+  return typeof p?.input_cost_per_token === 'number' && typeof p?.output_cost_per_token === 'number'
+}
+
+/**
+ * The rate entry for a model under a pricing profile. Falls back to the plain
+ * entry when the profile has no price for the model, and says so. Fast mode is
+ * a multiple only the plain Anthropic entry publishes, so it is carried over.
+ */
+function lookupRate(prices, model, profile = 'anthropic') {
+  const base = model.trim().toLowerCase().split('[')[0]
+  if (UNPRICEABLE.has(base)) return null
+  const plain = prices[base]
+  if (!validEntry(plain)) return null
+  const profiled = prices[PRICING_PROFILES[profile].key(base)]
+  const usable = validEntry(profiled)
+  return {
+    entry: usable ? profiled : plain,
+    fellBack: profile !== 'anthropic' && !usable,
+    fastMultiplier: plain.provider_specific_entry?.fast,
   }
-  return p
+}
+
+/** The long-context tier a prompt falls in, read from `*_above_<n>k_tokens` field names. */
+function longContextSuffix(entry, promptTokens) {
+  let best = ''
+  let bestThreshold = 0
+  for (const name of Object.keys(entry)) {
+    const match = /^input_cost_per_token_above_(\d+)k_tokens$/.exec(name)
+    const threshold = match ? Number(match[1]) * 1000 : 0
+    if (threshold && promptTokens > threshold && threshold > bestThreshold) {
+      best = `_above_${match[1]}k_tokens`
+      bestThreshold = threshold
+    }
+  }
+  return best
 }
 
 /**
  * Per-token rates for one request. Speed and long-context tiers are suffixed
  * LiteLLM fields (`_priority`, `_ultrafast`, `_above_272k_tokens`); a tier the
  * table lacks falls back to the next simpler one. Claude fast mode is a plain
- * multiple in `provider_specific_entry.fast` instead.
+ * multiple instead.
  */
-function ratesFor(entry, { speed, longContext }) {
-  const claudeFast = speed === 'fast' ? entry.provider_specific_entry?.fast : undefined
+function ratesFor({ entry, fastMultiplier }, { speed, promptTokens }) {
+  const claudeFast = speed === 'fast' ? fastMultiplier : undefined
   const s = claudeFast ? '' : SPEED_SUFFIX[speed]
-  const long = longContext ? '_above_272k_tokens' : ''
+  const long = longContextSuffix(entry, promptTokens)
   const suffixes = [...new Set([long + s, s, long, ''])]
   const pick = (field) => {
     for (const suffix of suffixes) {
@@ -242,13 +279,13 @@ function ratesFor(entry, { speed, longContext }) {
   }
 }
 
-function priceRecord(prices, record) {
-  const entry = lookupRate(prices, record.model)
-  if (!entry) {
+function priceRecord(prices, record, profile = 'anthropic') {
+  const rate = lookupRate(prices, record.model, record.provider === 'claude' ? profile : 'anthropic')
+  if (!rate) {
     if (record.reportedCost === null) return null
-    return { costs: { ...zeros(), output: record.reportedCost }, cacheSavings: 0 }
+    return { costs: { ...zeros(), output: record.reportedCost }, cacheSavings: 0, fellBack: false }
   }
-  const r = ratesFor(entry, record)
+  const r = ratesFor(rate, record)
   const t = record.tokens
   const write1h = Math.min(record.write1h, t.cacheWrite)
   const costs = {
@@ -257,16 +294,16 @@ function priceRecord(prices, record) {
     cacheWrite: (t.cacheWrite - write1h) * r.cacheWrite + write1h * r.cacheWrite1h,
     output: t.output * r.output,
   }
-  let cacheSavings = t.cacheRead * (r.input - r.cacheRead)
-  if (record.reportedCost !== null) {
-    // A reported cost wins; split it in proportion to list rates.
+  const cacheSavings = t.cacheRead * (r.input - r.cacheRead)
+  // A reported cost is what Anthropic's API charged; it doesn't apply elsewhere.
+  if (record.reportedCost !== null && profile === 'anthropic') {
     const list = sumOf(costs)
-    if (list <= 0) return { costs: { ...zeros(), output: record.reportedCost }, cacheSavings: 0 }
+    if (list <= 0) return { costs: { ...zeros(), output: record.reportedCost }, cacheSavings: 0, fellBack: false }
     const scale = record.reportedCost / list
     for (const k of CATEGORIES) costs[k] *= scale
-    cacheSavings *= scale
+    return { costs, cacheSavings: cacheSavings * scale, fellBack: false }
   }
-  return { costs, cacheSavings }
+  return { costs, cacheSavings, fellBack: rate.fellBack }
 }
 
 // ── Aggregation ───────────────────────────────────────────────────────────────
@@ -282,22 +319,34 @@ const SOURCES = {
   codex: { root: () => path.join(homeDir('CODEX_HOME', '.codex'), 'sessions'), read: readCodex },
 }
 
-/**
- * `days[day][provider]` holds token and cost totals by category plus per-model
- * figures, so the UI can filter by provider and period without rescanning.
- */
-async function summarize({ prices }) {
-  const days = {}
-  const providers = {}
+/** Reads every source. Slow (seconds); the result can be re-priced cheaply. */
+async function scan() {
+  const sources = {}
   for (const [provider, source] of Object.entries(SOURCES)) {
     const root = source.root()
-    const { files, records } = await source.read(root)
-    const stats = (providers[provider] = { root, files, records: records.length, unpriced: 0 })
+    sources[provider] = { root, ...(await source.read(root)) }
+  }
+  return sources
+}
+
+/**
+ * Prices scanned records under a pricing profile. `days[day][provider]` holds
+ * token and cost totals by category plus per-model figures, so the UI can
+ * filter by provider and period without re-pricing. `baselineCost` is the same
+ * Claude usage at Anthropic API prices, for comparison.
+ */
+function aggregate(sources, prices, profile = 'anthropic') {
+  const days = {}
+  const providers = {}
+  const fellBackModels = new Set()
+  for (const [provider, { root, files, records }] of Object.entries(sources)) {
+    const stats = (providers[provider] = { root, files, records: records.length, unpriced: 0, cost: 0, baselineCost: 0 })
     for (const record of records) {
-      const priced = priceRecord(prices, record)
+      const priced = priceRecord(prices, record, profile)
       if (priced === null) stats.unpriced++
+      if (priced?.fellBack) fellBackModels.add(record.model)
       const day = dayFormat.format(new Date(record.timestamp))
-      const d = ((days[day] ??= {})[provider] ??= { tokens: zeros(), costs: zeros(), cacheSavings: 0, models: {} })
+      const d = ((days[day] ??= {})[provider] ??= { tokens: zeros(), costs: zeros(), baselineCost: 0, cacheSavings: 0, models: {} })
       const m = (d.models[record.model] ??= { tokens: 0, cost: 0 })
       addInto(d.tokens, record.tokens)
       m.tokens += sumOf(record.tokens)
@@ -305,10 +354,25 @@ async function summarize({ prices }) {
         addInto(d.costs, priced.costs)
         d.cacheSavings += priced.cacheSavings
         m.cost += sumOf(priced.costs)
+        const baseline = profile === 'anthropic' ? priced : priceRecord(prices, record)
+        d.baselineCost += sumOf(baseline.costs)
+        stats.cost += sumOf(priced.costs)
+        stats.baselineCost += sumOf(baseline.costs)
       }
     }
   }
-  return { days, providers, readAt: new Date().toISOString() }
+  return {
+    days,
+    providers,
+    profile,
+    profiles: Object.fromEntries(Object.entries(PRICING_PROFILES).map(([k, v]) => [k, v.label])),
+    fellBackModels: [...fellBackModels].sort(),
+    readAt: new Date().toISOString(),
+  }
 }
 
-module.exports = { summarize, fetchPrices, lookupRate, ratesFor, priceRecord }
+async function summarize({ prices, profile }) {
+  return aggregate(await scan(), prices, profile)
+}
+
+module.exports = { scan, aggregate, summarize, fetchPrices, lookupRate, ratesFor, priceRecord, PRICING_PROFILES }

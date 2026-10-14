@@ -1,12 +1,15 @@
 const { app, BrowserWindow, ipcMain } = require('electron')
 const path = require('node:path')
-const { summarize, fetchPrices } = require('./usage.js')
+const { scan, aggregate, fetchPrices } = require('./usage.js')
 
 let prices = null
+// Scanning takes seconds; re-pricing scanned records takes well under one.
+let sources = null
 
-ipcMain.handle('usage:summary', async () => {
+ipcMain.handle('usage:summary', async (_event, { profile = 'anthropic', rescan = false } = {}) => {
   prices ??= await fetchPrices()
-  return summarize({ prices })
+  if (!sources || rescan) sources = await scan()
+  return aggregate(sources, prices, profile)
 })
 
 app.whenReady().then(() => {
@@ -14,7 +17,7 @@ app.whenReady().then(() => {
     width: 1100,
     height: 900,
     backgroundColor: '#0f0f10',
-    title: 'Claude Cost',
+    title: 'Agent Cost',
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   })
   win.loadFile('index.html')
