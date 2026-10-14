@@ -11,8 +11,9 @@ ipcMain.handle('usage:summary', async () => {
 
 app.whenReady().then(() => {
   const win = new BrowserWindow({
-    width: 460,
-    height: 680,
+    width: 1100,
+    height: 900,
+    backgroundColor: '#0f0f10',
     title: 'Claude Cost',
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   })

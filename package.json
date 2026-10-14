@@ -6,7 +6,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "summary": "node -e \"const u=require('./usage.js');u.fetchPrices().then(p=>u.summarize({prices:p})).then(s=>console.log(JSON.stringify({total:s.total,records:s.records,unpriced:s.unpriced,files:s.files,days:Object.fromEntries(Object.entries(s.days).sort().slice(-5))},null,1)))\""
+    "summary": "node -e \"const u=require('./usage.js');u.fetchPrices().then(p=>u.summarize({prices:p})).then(s=>{for(const d of Object.keys(s.days).sort().slice(-7)){const c=s.days[d].costs;console.log(d,(c.input+c.cacheRead+c.cacheWrite+c.output).toFixed(2))}})\""
   },
   "devDependencies": {
     "electron": "44.7.2"
