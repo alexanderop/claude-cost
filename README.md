@@ -20,3 +20,11 @@ from T3 Code, hover tooltip), cost/token share bars, model table. 7D/30D/90D/All
 Cost/Tokens toggles. No chart library.
 
 This is list-price cost, not what a subscription bills. Matches `npx ccusage daily` within cents.
+
+## Credits
+
+Approach and chart design follow the usage page in [T3 Code](https://github.com/pingdotgg/t3code). Prices from [LiteLLM](https://github.com/BerriAI/litellm).
+
+## License
+
+MIT
